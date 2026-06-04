@@ -23,6 +23,10 @@ import {
 } from "./useFileSystemHelpers";
 import { useFileSystemFolderActions } from "./useFileSystemFolderActions";
 import { useFileSystemEffects } from "./useFileSystemEffects";
+import {
+  appendMarkdownFileNameCounter,
+  normalizeMarkdownFileName,
+} from "../utils/fileName";
 
 interface UseFileSystemOptions {
   enableEffects?: boolean;
@@ -58,6 +62,28 @@ export function useFileSystem(options: UseFileSystemOptions = {}) {
   const { setMarkdown, markdown } = useEditorStore();
   const { themeId: theme, themeName } = useThemeStore();
   const isCreating = useRef<boolean>(false);
+
+  const resolveAvailableFilePath = useCallback(
+    async (folderPath: string | undefined, fileName: string) => {
+      if (!adapter || !storageReady) {
+        return { fileName, filePath: joinPath(folderPath, fileName) };
+      }
+
+      let candidateName = fileName;
+      let candidatePath = joinPath(folderPath, candidateName);
+      let counter = 1;
+
+      while (await adapter.exists(candidatePath)) {
+        candidateName = appendMarkdownFileNameCounter(fileName, counter);
+        candidatePath = joinPath(folderPath, candidateName);
+        counter += 1;
+      }
+
+      return { fileName: candidateName, filePath: candidatePath };
+    },
+    [adapter, storageReady],
+  );
+
   const refreshFiles = useCallback(
     async (dir?: string) => {
       if (electron) {
@@ -238,7 +264,7 @@ export function useFileSystem(options: UseFileSystemOptions = {}) {
       });
 
       try {
-        const filename = `未命名文章-${Date.now()}.md`;
+        const filename = normalizeMarkdownFileName(initialTitle);
         const targetPath = joinPath(folderPath, filename);
 
         if (electron) {
@@ -265,11 +291,15 @@ export function useFileSystem(options: UseFileSystemOptions = {}) {
         }
 
         if (adapter && storageReady) {
-          await adapter.writeFile(targetPath, initialContent);
+          const available = await resolveAvailableFilePath(
+            folderPath,
+            filename,
+          );
+          await adapter.writeFile(available.filePath, initialContent);
           await refreshFiles();
           const newFile = {
-            name: filename,
-            path: targetPath,
+            name: available.fileName,
+            path: available.filePath,
             createdAt: new Date(),
             updatedAt: new Date(),
             size: initialContent.length,
@@ -285,7 +315,15 @@ export function useFileSystem(options: UseFileSystemOptions = {}) {
         isCreating.current = false;
       }
     },
-    [workspacePath, refreshFiles, openFile, electron, adapter, storageReady],
+    [
+      workspacePath,
+      refreshFiles,
+      openFile,
+      electron,
+      adapter,
+      storageReady,
+      resolveAvailableFilePath,
+    ],
   );
 
   const saveFile = useCallback(
